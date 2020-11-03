@@ -1,0 +1,380 @@
+"""
+Add all features
+Gradient Booting - part 4
+Embedded Matrix
+SQ learner
+SVM
+NLP - LSTM
+
+"""
+TEST_SIZE = 702
+TRAIN_SIZE = 700
+
+import pandas as pd
+import numpy as np
+from sklearn import preprocessing
+from sklearn import tree
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+import requests
+import matplotlib.pyplot as plt
+from bs4 import BeautifulSoup
+from sklearn import svm
+import time
+from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import accuracy_score
+from sklearn.naive_bayes import MultinomialNB
+from time import sleep
+import sklearn
+from sklearn.linear_model import LogisticRegression
+import torch
+import torch.nn as nn
+from sklearn.ensemble import GradientBoostingClassifier
+import torch.nn.functional as F
+import torch.optim as optim
+le = preprocessing.LabelEncoder()
+
+print(sklearn.__version__)
+# Functions
+def Convert(string):
+    li = list(string)
+    return li
+
+
+def extract(file_name):
+    data = pd.read_csv(file_name)
+    target_category = data.drop('url', axis='columns')
+    target_category = target_category.drop('html_file_name', axis='columns')
+    input_html = data.drop('url', axis='columns')
+    input_html = input_html.drop('category', axis='columns')
+    input_url = data.drop('category', axis='columns')
+    input_url = input_url.drop('html_file_name', axis='columns')
+    return target_category, input_html, input_url
+
+
+# Word Counts with CountVectorizer (bagOfWords)
+def tokenize(text):
+    vectorizer = TfidfVectorizer(text, stop_words='english')  # CountVectorizer() #CountVectorizer(document,stop_words='english') #TfidfVectorizer()
+    vectorizer.fit(text)
+    # print(vectorizer.vocabulary_)
+    vector = vectorizer.transform(text)
+    return vector
+
+
+# Get number of links in the page
+def NumOfLink(soup):
+    NumOfLink = 0
+    for a in soup.find_all('a', href=True):
+        # print("Found the URL:", a['href'])
+        NumOfLink += 1;
+    return NumOfLink
+
+
+def NumOfDirector(soup):
+    NumOfDirector = 0
+    for a in soup.find_all('Technical'):
+        print("director:", a)
+        NumOfDirector += 1;
+    return NumOfDirector
+
+
+def GetHTMLTokenize(input_html):
+    html_list = []
+    for len in range(TEST_SIZE):  # input_html.__len__()):
+        html = input_html._get_value(len, 'html_file_name')
+        html = html.replace("_", " ")
+        html = html.replace(".", " ")
+        html = html.replace("  ", " ")
+        html_list = html_list + [html]
+    html_list = Convert(html_list)
+    return tokenize(html_list)
+
+
+def get_url(url):
+    print(url)
+    count = 0
+    page = ''
+    while page == '':
+        try:
+            page = requests.get(url)
+            break
+        except:
+            print("Connection refused by the server..")
+            print("Let me sleep for 5 seconds")
+            print("ZZzzzz...")
+            time.sleep(5)
+            print("Was a nice sleep, now let me continue...")
+            page = "  "
+            continue
+    return page
+
+
+def GetWebPageTextTokenizeAllText(input_url, remove_columns):
+    webpage_text = []
+    count = 0
+    for len in range(TEST_SIZE):  # input_url.__len__()):
+        print(count, ':')
+        html = get_url(input_url._get_value(830 + len, 'url'))
+        soup = BeautifulSoup(html.text, 'html.parser')  # lxml is just the parser for reading the html
+        links = NumOfLink(soup)
+        wp = soup.get_text()
+        webpage_text = webpage_text + [wp]
+        count = count + 1
+        vector = tokenize(webpage_text)
+    df = pd.DataFrame(vector.todense())
+    print("Before remove features: ", df.shape)
+    if remove_columns:
+        sum_row = df.sum(axis=0)
+        print(type(sum_row))
+        cols = []
+        for idx in range(sum_row.size):
+            if (sum_row[idx] <= 2):
+                cols = cols + [idx]
+        df.drop(df.columns[cols], axis=1, inplace=True)
+    print("After remove features: ", df.shape)
+    return df
+
+
+def GetWebPageTextTokenize(input_url):
+    features = []
+    count = 0
+    for len in range(TEST_SIZE):  # input_url.__len__()):
+        print(count, ':')
+        html = get_url(input_url._get_value(830 + len, 'url'))
+        soup = BeautifulSoup(html.text, 'html.parser')  # lxml is just the parser for reading the html
+        links = NumOfLink(soup)
+        text = soup.get_text()
+        numD = text.upper().count('director'.upper())
+        numM = text.upper().count('management'.upper())
+        numB = text.upper().count('board'.upper())
+        numT = text.upper().count('team'.upper())
+        numS = text.upper().count('staff'.upper())
+        numtrustees = text.upper().count('trustees'.upper())
+        numTreasurer = text.upper().count('Treasurer'.upper())
+        numgovernors = text.upper().count('governors'.upper())
+        numadvisors = text.upper().count('advisors'.upper())
+        numvisitors = text.upper().count('visitors'.upper())
+        numexecutive = text.upper().count('executive'.upper())
+        numCEO = text.upper().count('CEO'.upper())
+        numChairmen = text.upper().count('Chairmen'.upper())
+        f = [numD, numM, numB, numT, numS, numtrustees, numTreasurer, numgovernors, numadvisors, numvisitors,
+             numexecutive, numCEO, numChairmen, links]
+        features = features + [f]
+        count = count + 1
+        res = pd.DataFrame(data=features)
+    return res
+
+# determine the supported device
+def get_device():
+    if torch.cuda.is_available():
+        device = torch.device('cuda:0')
+    else:
+        device = torch.device('cpu') # don't have GPU
+    return device
+
+# convert a df to tensor to be used in pytorch
+def df_to_tensor(df):
+    device = get_device()
+    return torch.from_numpy(df.values).float().to(device)
+
+
+def pruning(model, X_train, Y_train):
+    # Post pruning decision trees with cost complexity pruning
+    path = model.cost_complexity_pruning_path(X_train, Y_train)
+    ccp_alphas, impurities = path.ccp_alphas, path.impurities
+    clfs = []
+    for ccp_alpha in ccp_alphas:
+        clf = tree.DecisionTreeClassifier(random_state=0, ccp_alpha=ccp_alpha)
+        clf.fit(X_train, Y_train)
+        clfs.append(clf)
+    print(
+        "Number of nodes in the last tree is: {} with ccp_alpha: {}".format(clfs[-1].tree_.node_count, ccp_alphas[-1]))
+    # Accuracy vs alpha for training and testing sets
+    train_scores = [clf.score(X_train, Y_train) for clf in clfs]
+    test_scores = [clf.score(X_test, Y_test) for clf in clfs]
+    # Plot
+    fig, ax = plt.subplots()
+    ax.set_xlabel("alpha")
+    ax.set_ylabel("accuracy")
+    ax.set_title("Accuracy vs alpha for training and testing sets")
+    ax.plot(ccp_alphas, train_scores, marker='o', label="train",
+            drawstyle="steps-post")
+    ax.plot(ccp_alphas, test_scores, marker='o', label="test",
+            drawstyle="steps-post")
+    ax.legend()
+    plt.show()
+    return ccp_alpha
+
+
+
+class NetName(nn.Module):
+
+    def __init__(self, D_in, D_out):
+        H1 = 10
+        H2 = 10
+        super(NetName, self).__init__()
+        # Number of input features is D_in.
+        self.layer_1 = nn.Linear(D_in, 64)
+        self.layer_2 = nn.Linear(64, 64)
+        self.layer_out = nn.Linear(64, 1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=0.1)
+        self.batchnorm1 = nn.BatchNorm1d(64)
+        self.batchnorm2 = nn.BatchNorm1d(64)
+
+    def forward(self, inputs):
+        x = self.relu(self.layer_1(inputs))
+        x = self.batchnorm1(x)
+        x = self.relu(self.layer_2(x))
+        x = self.batchnorm2(x)
+        x = self.dropout(x)
+        x = self.layer_out(x)
+        return x
+
+# Read .csv file
+ret = extract("dataset.csv")
+target_category = ret[0]
+input_html = ret[1]
+input_url = ret[2]
+
+# Get vectors for url, html file name (inputs) and category (target)
+vectorHTML = GetHTMLTokenize(input_html)
+df_HTML = pd.DataFrame(vectorHTML.todense())
+df_WP_1 = GetWebPageTextTokenizeAllText(input_url, 1)
+df_WP_2 = GetWebPageTextTokenize(input_url)
+#
+inputs = pd.concat([df_WP_1, df_WP_2, df_HTML], axis=1)
+
+# Export DataFrame
+inputs.to_csv("SpecificFeatures_.csv")
+# Import DataFrame
+# inputs1 = pd.read_csv("AllFeatures_700_0.85.csv")
+# inputs = inputs1.drop(inputs1.columns[[0]], axis=1)
+
+target_dictionary = ['BOD', 'MTEAM_BOD', 'DIRECTORY URL', 'MTEAM', 'OTHER']
+vectorTarget = []
+for x in range(len(target_category)):
+    if (target_category.at[x, 'category'] == 'BOD') or (target_category.at[x, 'category'] == 'MTEAM_BOD'):
+        val = 1
+    else:
+        val = 0
+    vectorTarget = vectorTarget + [val]
+# le_target = LabelEncoder();
+# vectorTarget = le_target.fit_transform(target_category)
+target_category_t = vectorTarget[:TRAIN_SIZE]
+inputs_t = inputs.head(TRAIN_SIZE)
+
+X_train, X_test, Y_train, Y_test = train_test_split(inputs_t, target_category_t, test_size=.3, random_state=1)
+
+net = NetName(len(X_train.columns),1)
+optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=0.01) # keep momentum per batch?
+loss_fn = nn.L1Loss()
+n_epochs = 500
+for t in range(n_epochs):
+    optimizer.zero_grad()
+    X_train_tensor = df_to_tensor(X_train)
+    idx = 0
+    # for param in net.parameters():
+    #     idx += 1
+    #     print(type(param.data), param.size())
+    #     print('param: ', idx, '\n', param.data)
+    Y_train_tensor_het = net(X_train_tensor)
+    Y_train_tensor = torch.tensor(Y_train)
+    loss = loss_fn(Y_train_tensor, Y_train_tensor_het)
+    # print('loss: ', loss)
+    if loss > 0.05:
+        loss.backward()
+        optimizer.step()
+    else:
+        print("Stop Training after:", t)
+        print('Training loss is: ', loss)
+        break
+
+GB_model = GradientBoostingClassifier(n_estimators=150)
+GB_model.fit(X_train, Y_train)
+y_pred_train = GB_model.predict(X_train)
+y_pred = GB_model.predict(X_test)
+print('GB_model score: ',GB_model.score(X_train, Y_train))
+err = accuracy_score(Y_test, y_pred)
+print('accuracy_score Gradient Boosting: ', err)
+err = mean_absolute_error(Y_test, y_pred)
+print('mean_absolute_error Gradient Boosting: ', err)
+
+
+GB_model = GradientBoostingClassifier(n_estimators=180)
+GB_model.fit(X_train, Y_train)
+y_pred_train = GB_model.predict(X_train)
+y_pred = GB_model.predict(X_test)
+print('GB_model score: ',GB_model.score(X_train, Y_train))
+err = accuracy_score(Y_test, y_pred)
+print('accuracy_score Gradient Boosting: ', err)
+err = mean_absolute_error(Y_test, y_pred)
+print('mean_absolute_error Gradient Boosting: ', err)
+
+GB_model = GradientBoostingClassifier(n_estimators=200)
+GB_model.fit(X_train, Y_train)
+y_pred_train = GB_model.predict(X_train)
+y_pred = GB_model.predict(X_test)
+print('GB_model score: ',GB_model.score(X_train, Y_train))
+err = accuracy_score(Y_test, y_pred)
+print('accuracy_score Gradient Boosting: ', err)
+err = mean_absolute_error(Y_test, y_pred)
+print('mean_absolute_error Gradient Boosting: ', err)
+
+
+DT_model = tree.DecisionTreeClassifier(random_state=1)
+DT_model.fit(X_train, Y_train)
+ccp_alphas = pruning(DT_model, X_train, Y_train)
+DT_model = tree.DecisionTreeClassifier(random_state=1, ccp_alpha=0.0039)
+DT_model.fit(X_train, Y_train)
+y_pred_train = DT_model.predict(X_train)
+print('DT_model score: ',DT_model.score(X_train, Y_train))
+y_pred = DT_model.predict(X_test)
+err = accuracy_score(Y_test, y_pred)
+print('accuracy_score DecisionTree: ', err)
+err = mean_absolute_error(Y_test, y_pred)
+print('mean_absolute_error DecisionTree: ', err)
+
+RF_model = RandomForestClassifier(random_state=1)
+RF_model.fit(X_train, Y_train)
+y_pred_train = RF_model.predict(X_train)
+y_pred = RF_model.predict(X_test)
+print('RF_model score: ',RF_model.score(X_train, Y_train))
+err = accuracy_score(Y_test, y_pred)
+print('accuracy_score Random Forest: ', err)
+err = mean_absolute_error(Y_test, y_pred)
+print('mean_absolute_error Random Forest: ', err)
+
+NB_model = MultinomialNB()
+NB_model.fit(X_train, Y_train)
+y_pred_train = NB_model.predict(X_train)
+print('NB_model score: ',NB_model.score(X_train, Y_train))
+y_pred = NB_model.predict(X_test)
+err = accuracy_score(Y_test, y_pred)
+print('accuracy_score MultinomialNB: ', err)
+err = mean_absolute_error(Y_test, y_pred)
+print('mean_absolute_error MultinomialNB: ', err)
+
+LR_model = LogisticRegression()
+LR_model.fit(X_train, Y_train)
+y_pred_train = LR_model.predict(X_train)
+print('LR_model score: ',LR_model.score(X_train, Y_train))
+y_pred = LR_model.predict(X_test)
+err = accuracy_score(Y_test, y_pred)
+print('accuracy_score LR_model: ', err)
+err = mean_absolute_error(Y_test, y_pred)
+print('mean_absolute_error LR_model: ', err)
+
+SVM_model = svm.LinearSVC()
+SVM_model.fit(X_train, Y_train)
+y_pred_train = SVM_model.predict(X_train)
+print('SVM_model score: ',SVM_model.score(X_train, Y_train))
+y_pred = SVM_model.predict(X_test)
+err = accuracy_score(Y_test, y_pred)
+print('accuracy_score SVM_model: ', err)
+err = mean_absolute_error(Y_test, y_pred)
+print('mean_absolute_error SVM_model: ', err)
+X_train_tensor = df_to_tensor(X_train)
